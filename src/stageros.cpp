@@ -46,6 +46,7 @@
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
 #include <sensor_msgs/CameraInfo.h>
+#include <sensor_msgs/Imu.h>
 #include <nav_msgs/Odometry.h>
 #include <geometry_msgs/Twist.h>
 #include <rosgraph_msgs/Clock.h>
@@ -90,6 +91,7 @@ private:
         //ros publishers
         ros::Publisher odom_pub; //one odom
         ros::Publisher ground_truth_pub; //one ground truth
+		ros::Publisher imu_pub;
 
         std::vector<ros::Publisher> image_pubs; //multiple images
         std::vector<ros::Publisher> depth_pubs; //multiple depths
@@ -361,7 +363,8 @@ StageNode::SubscribeModels()
 		 new_robot->cameramodels.size() );
 
         new_robot->odom_pub = n_.advertise<nav_msgs::Odometry>(mapName(ODOM, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10);
-        new_robot->ground_truth_pub = n_.advertise<nav_msgs::Odometry>(mapName(BASE_POSE_GROUND_TRUTH, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10);
+		new_robot->imu_pub = n_.advertise<sensor_msgs::Imu>("imu", 10);
+        //new_robot->ground_truth_pub = n_.advertise<nav_msgs::Odometry>(mapName(BASE_POSE_GROUND_TRUTH, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10);
         new_robot->cmdvel_sub = n_.subscribe<geometry_msgs::Twist>(mapName(CMD_VEL, r, static_cast<Stg::Model*>(new_robot->positionmodel)), 10, boost::bind(&StageNode::cmdvelReceived, this, r, _1));
 
         for (size_t s = 0;  s < new_robot->lasermodels.size(); ++s)
@@ -523,6 +526,7 @@ StageNode::WorldCallback()
         //
         odom_msg.header.frame_id = mapName("odom", r, static_cast<Stg::Model*>(robotmodel->positionmodel));
         odom_msg.header.stamp = sim_time;
+		odom_msg.child_frame_id = std::string("base_footprint");
 
         robotmodel->odom_pub.publish(odom_msg);
 
@@ -533,6 +537,24 @@ StageNode::WorldCallback()
         tf.sendTransform(tf::StampedTransform(txOdom, sim_time,
                                               mapName("odom", r, static_cast<Stg::Model*>(robotmodel->positionmodel)),
                                               mapName("base_footprint", r, static_cast<Stg::Model*>(robotmodel->positionmodel))));
+		// Broadcast Imu -> Odom transform
+		tf::Quaternion imuQ(0, 0, odom_msg.pose.pose.orientation.z, 1);
+		tf::Transform imuTx(imuQ, tf::Point(odom_msg.pose.pose.position.x, odom_msg.pose.pose.position.y, 0.0));
+		tf.sendTransform(tf::StampedTransform(imuTx, sim_time, "odom", "imu_link"));
+
+		// Publish Imu topic
+		sensor_msgs::Imu imu_msg;
+		imu_msg.header.stamp = sim_time;
+		imu_msg.header.frame_id = std::string("imu_link");
+
+		imu_msg.orientation = tf::createQuaternionMsgFromYaw(robotmodel->positionmodel->est_pose.a);
+		//imu_msg.orientation_covariance = 
+		imu_msg.angular_velocity.z = v.a;
+
+		imu_msg.linear_acceleration.z = 9.8;
+		imu_msg.linear_acceleration.x = 0.0;
+		robotmodel->imu_pub.publish(imu_msg);
+
 
         // Also publish the ground truth pose and velocity
         Stg::Pose gpose = robotmodel->positionmodel->GetGlobalPose();
@@ -555,7 +577,7 @@ StageNode::WorldCallback()
         }else //There are no previous readings, adding current pose...
             this->base_last_globalpos.push_back(gpose);
 
-        nav_msgs::Odometry ground_truth_msg;
+        /*nav_msgs::Odometry ground_truth_msg;
         ground_truth_msg.pose.pose.position.x     = gt.getOrigin().x();
         ground_truth_msg.pose.pose.position.y     = gt.getOrigin().y();
         ground_truth_msg.pose.pose.position.z     = gt.getOrigin().z();
@@ -571,7 +593,7 @@ StageNode::WorldCallback()
         ground_truth_msg.header.frame_id = mapName("odom", r, static_cast<Stg::Model*>(robotmodel->positionmodel));
         ground_truth_msg.header.stamp = sim_time;
 
-        robotmodel->ground_truth_pub.publish(ground_truth_msg);
+        robotmodel->ground_truth_pub.publish(ground_truth_msg);*/
 
         //cameras
         for (size_t s = 0; s < robotmodel->cameramodels.size(); ++s)
